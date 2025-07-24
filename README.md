@@ -10,7 +10,7 @@ Made by whatzwasthere(https://t.me/whatzwasthere)
 [![Build](https://img.shields.io/github/actions/workflow/status/whatzwastaken/makcu-rs/ci.yml)](https://github.com/whatzwastaken/makcu-rs/actions)
 
 ---
-# FASTEST EVER MAKCU LIB
+# FASTEST EVER MAKCU LIB (DELAY 70-100 NANO SECONDS)
 ## 🚦 Performance Comparison
 
 | Operation         | makcu-py-lib v2.0 | makcu-cpp | makcu-rs (avg_us) | Evaluation        |
