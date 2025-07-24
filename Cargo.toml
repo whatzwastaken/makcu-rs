@@ -1,0 +1,71 @@
+[package]
+name         = "makcu-rs"
+version      = "0.1.0"
+edition      = "2024"
+rust-version = "1.85.0"
+authors      = ["tg: @whatzwasthere", "github: whatzwastaken"]
+description  = "Fast and modular communication interface using serial ports, built with async-first design in Rust."
+readme       = "README.md"
+homepage     = "https://github.com/whatzwastaken/makcu-rs"
+repository   = "https://github.com/whatzwastaken/makcu-rs"
+license      = "MIT OR Apache-2.0"
+keywords     = ["serial", "async", "embedded", "com-port", "tokio"]
+categories   = ["asynchronous", "hardware-support", "network-programming"]
+exclude      = ["/target", "**/*.rs.bk", "**/*.log"]
+publish      = true
+
+[lib]
+name = "makcu_rs"
+path = "src/lib.rs"
+
+[dependencies]
+# Async runtime & utilities
+tokio = { version = "1.46", features = ["rt-multi-thread", "macros", "io-util", "sync"] }
+tokio-serial = "5.4.4"
+
+# Error handling
+anyhow      = "1"
+thiserror   = "1"
+
+# Sync primitives
+parking_lot = "0.12"
+once_cell   = "1"
+crossbeam-channel = "0.5"
+
+# Data handling
+bytes     = "1.10.1"
+memchr    = "2.7.5"
+rustc-hash = "2.1.1"
+
+# Serial port abstraction
+serialport = "4"
+
+[features]
+default    = ["async"]
+async      = []         # Enables async support (Tokio)
+profile    = []         # Enables built-in profiler
+mockserial = []         # Enables mock serial port for testing
+
+[profile.dev]
+opt-level = 1
+debug = true
+overflow-checks = true
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = false
+panic = "abort"
+overflow-checks = false
+
+[lints.rust]
+# Enable common lints for higher code quality
+unsafe_code = "forbid"
+missing_docs = "warn"
+unused_imports = "warn"
+dead_code = "warn"
+
+[badges]
+github = { repository = "whatzwastaken/makcu-rs", branch = "main" }
+
