@@ -15,10 +15,10 @@ Made by whatzwasthere(https://t.me/whatzwasthere)
 
 | Operation         | makcu-py-lib v2.0 | makcu-cpp | makcu-rs (avg_us) | Evaluation        |
 |------------------|-------------------|---------------------|----------------------|--------------------|
-| Mouse Move       | 2000 µs           | 70 µs               | 0.0 µs               | ✅ Best            |
+| Mouse Move       | 2000 µs           | 70 µs               | ~0.0 µs               | ✅ Best            |
 | Click            | 1000–2000 µs      | 160 µs              | 0.1 µs               | ✅ Best            |
-| Press / Release  | ~1000 µs          | 55–100 µs           | 0.1 µs / 0.0 µs      | ✅ Best            |
-| Wheel Scroll     | 1000–2000 µs      | 48 µs               | 0.0 µs               | ✅ Best            |
+| Press / Release  | ~1000 µs          | 55–100 µs           | 0.1 µs / ~0.0 µs      | ✅ Best            |
+| Wheel Scroll     | 1000–2000 µs      | 48 µs               | ~0.0 µs               | ✅ Best            |
 | Batch (9 ops)    | 3000 µs           | <100 µs             | 0.5 µs               | ✅ Best            |
 
 
