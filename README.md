@@ -1,6 +1,6 @@
 # makcu-rs
 
-Made by t.me/whatzwasthere
+Made by whatzwasthere(https://t.me/whatzwasthere)
 
 > **Fast and modular communication interface over serial ports. Built with performance and async-first in mind.**
 
