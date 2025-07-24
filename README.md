@@ -20,8 +20,6 @@ Made by whatzwasthere(https://t.me/whatzwasthere)
 | Press / Release  | ~1000 µs          | 55–100 µs           | 0.1 µs / 0.0 µs      | ✅ Best            |
 | Wheel Scroll     | 1000–2000 µs      | 48 µs               | 0.0 µs               | ✅ Best            |
 | Batch (9 ops)    | 3000 µs           | <100 µs             | 0.5 µs               | ✅ Best            |
-| Async (5 ops)    | 2000 µs           | 200 µs              | ❌ No data           | ❓ Needs testing   |
-| Connect          | ~800 µs           | —                   | 860.3 µs             | ⚠️ Acceptable      |
 
 
 
