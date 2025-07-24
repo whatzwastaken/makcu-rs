@@ -1,5 +1,7 @@
 # makcu-rs
 
+Made by t.me/whatzwasthere
+
 > **Fast and modular communication interface over serial ports. Built with performance and async-first in mind.**
 
 [![Crates.io](https://img.shields.io/crates/v/makcu-rs)](https://crates.io/crates/makcu-rs)
