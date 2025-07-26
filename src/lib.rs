@@ -1,11 +1,13 @@
 //! A library for interacting with a serial-controlled device that supports mouse button simulation and movement.
 use bytes::BytesMut;
-use crossbeam_channel::{bounded, Sender};
+use crossbeam_channel::{bounded, Sender, Receiver};
 use memchr::{memchr, memchr2};
 use parking_lot::{Mutex, RwLock};
 use once_cell::sync::Lazy;
 use rustc_hash::FxHashMap;
-use serialport::SerialPort; // trait
+use serialport::SerialPort; 
+use std::time::Instant;
+
 use std::{
     io::{Write},
     sync::{
@@ -72,8 +74,12 @@ impl MouseButtonStates {
     }
 }
 
+
+
 struct PendingCommand {
-    tx: Sender<String>,
+     tx: Sender<String>,
+     tag: &'static str,
+     started: Instant,
 }
 
 // ========================= Performance profiler (optional) =================
@@ -111,6 +117,13 @@ mod profiler {
                 })
                 .collect()
         }
+        pub fn prof(tag: &'static str, started: Instant) {
+            let dt = started.elapsed().as_secs_f64() * 1e6;
+            let mut map = PROFILER.lock();
+            let e = map.entry(tag).or_insert((0, 0.0));
+            e.0 += 1;
+            e.1 += dt;
+        }
     }
 }
 #[cfg(feature = "profile")]
@@ -126,17 +139,26 @@ impl PerformanceProfiler {
      fn stats() -> FxHashMap<&'static str, FxHashMap<&'static str, f64>> {
          FxHashMap::default()
      }
+     pub fn prof(_tag: &'static str, _started: Instant) {}
 }
 
 // ================================ SerialPort ===============================
 
+#[derive(Debug)]
+struct Packet {
+    data: Vec<u8>,
+    tag: &'static str,
+    started: Instant,
+    tracked_id: Option<u32>,
+}
+
 #[derive(Clone)]
 struct TxHandle {
-    queue: crossbeam_channel::Sender<Vec<u8>>,
+    queue: Sender<Packet>,
 }
 impl TxHandle {
     #[inline]
-    fn send(&self, packet: Vec<u8>) {
+    fn send(&self, packet: Packet) {
         let _ = self.queue.try_send(packet);
     }
 }
@@ -187,23 +209,26 @@ impl SerialPortWrap {
         self.stop.store(false, Ordering::Relaxed);
 
         // ---------- writer ----------
-        let (tx, rx) = bounded::<Vec<u8>>(1024);
+        let (tx, rx): (Sender<Packet>, Receiver<Packet>) = bounded(1024);
         let mut wport = self.ser.as_mut().unwrap().try_clone().unwrap();
         let stop_w = self.stop.clone();
         self.writer = Some(thread::spawn(move || {
             let mut buf = Vec::<u8>::with_capacity(4096);
             while !stop_w.load(Ordering::Relaxed) {
-                match rx.recv() {
+                    match rx.recv() {
                     Ok(first) => {
+                        let current_tag = first.tag;
+                        let started     = first.started;
                         buf.clear();
-                        buf.extend_from_slice(&first);
+                        buf.extend_from_slice(&first.data);
                         while let Ok(pk) = rx.try_recv() {
-                            buf.extend_from_slice(&pk);
+                            buf.extend_from_slice(&pk.data);
                         }
                         if let Err(e) = wport.write_all(&buf) {
                             eprintln!("writer error: {e}");
                             break;
                         }
+                        PerformanceProfiler::prof(current_tag, started);
                     }
                     Err(_) => break,
                 }
@@ -217,7 +242,7 @@ impl SerialPortWrap {
         let pending_r = self.pending.clone();
         let button_cb_r = self.button_cb.clone();
         self.reader = Some(thread::spawn(move || {
-            // **** первая правка: &mut *rport ****
+            
             reader_loop(&mut *rport, stop_r, pending_r, button_cb_r);
         }));
 
@@ -227,20 +252,25 @@ impl SerialPortWrap {
     pub fn close(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
 
-        // 🔔 разбудить потоки
+        
         if let Some(ser) = &mut self.ser {
             let _ = ser.set_timeout(Duration::from_millis(20));
         }
         if let Some(h) = &self.tx {
-            let _ = h.queue.try_send(Vec::new());
-        }
+             let _ = h.queue.try_send(Packet {
+                 data: Vec::new(),
+                 tag: "",
+                 started: Instant::now(),
+                 tracked_id: None,
+             });
+         }
 
         if let Some(h) = self.reader.take() { let _ = h.join(); }
         if let Some(h) = self.writer.take() { let _ = h.join(); }
 
         self.ser = None;
 
-        // отклоняем висящие tracked‑запросы
+        
         for (_, pc) in self.pending.lock().drain() {
             let _ = pc.tx.send("Port closed".into());
         }
@@ -253,11 +283,11 @@ impl SerialPortWrap {
         self.cmd_id.fetch_add(1, Ordering::Relaxed).wrapping_add(1)
     }
 
-    fn enqueue_ff(&self, packet: Vec<u8>) -> MakcuResult<()> {
-        self.tx
-            .as_ref()
-            .ok_or_else(|| MakcuError::Connection("Port not open".into()))
-            .map(|h| h.send(packet))
+    fn enqueue_ff(&self, packet: Packet) -> MakcuResult<()> {
+         self.tx
+             .as_ref()
+             .ok_or_else(|| MakcuError::Connection("Port not open".into()))
+             .map(|h| h.send(packet))
     }
 
     pub fn send_ff(&self, payload: &str) -> MakcuResult<()> {
@@ -271,10 +301,17 @@ impl SerialPortWrap {
             log.push_back(payload.as_bytes().to_vec());
             
         }
-        self.enqueue_ff(v)
+        self.enqueue_ff(Packet{
+             data: v,
+             tag: "move",           
+             started: Instant::now(),
+             tracked_id: None,
+        })
     }
 
     pub fn send_tracked(&self, payload: &str, timeout_s: f32) -> MakcuResult<String> {
+        let started = Instant::now();
+        let tag = "serial";
         {                           
             let mut log = SENT_LOG.lock();
             if log.len()==LOG_MAX { log.pop_front(); }
@@ -282,12 +319,12 @@ impl SerialPortWrap {
         }
         let cid = self.next_id();
         let (tx, rx) = bounded::<String>(1);
-        self.pending.lock().insert(cid, PendingCommand { tx });
+        self.pending.lock().insert(cid, PendingCommand { tx, tag, started });
 
         let mut v = Vec::with_capacity(payload.len() + 16);
         v.extend_from_slice(payload.as_bytes());
         v.extend_from_slice(format!("#{cid}{CRLF}").as_bytes());
-        self.enqueue_ff(v)?;
+        self.enqueue_ff(Packet { data: v, tag, started, tracked_id: Some(cid) })?;
 
         match rx.recv_timeout(Duration::from_secs_f32(timeout_s)) {
             Ok(resp) => Ok(resp),
@@ -322,7 +359,7 @@ fn reader_loop(
         match ser.read(&mut tmp) {
             Ok(0) => continue,
             Ok(n) => {
-                // быстрая дорожка: одиночный байт < 32 = событие кнопки
+                
                 if n == 1 && tmp[0] < 32 && tmp[0] != b'\r' && tmp[0] != b'\n' {
                     if let Some(cb) = &*button_cb.read() {
                         cb(MouseButtonStates::from_mask(tmp[0]));
@@ -350,7 +387,6 @@ fn handle_line_bytes(line: &[u8], pending: &Mutex<FxHashMap<u32, PendingCommand>
         if let Ok(s) = std::str::from_utf8(line) { println!("<< {s}"); }
     }
 
-    // ---------- штатный tracked‑ответ ...#id:payload ----------
     if let Some(hash) = memchr(b'#', line) {
         if let Some(colon) = memchr2(b':', b'\r', &line[hash + 1..]) {
             if let Some(cid) = std::str::from_utf8(&line[hash + 1..hash + 1 + colon])
@@ -358,6 +394,8 @@ fn handle_line_bytes(line: &[u8], pending: &Mutex<FxHashMap<u32, PendingCommand>
                 .and_then(|s| s.parse::<u32>().ok())
             {
                 if let Some(pc) = pending.lock().remove(&cid) {
+                    let dt = pc.started.elapsed();
+                    PerformanceProfiler::prof(pc.tag, pc.started); 
                     let payload =
                         String::from_utf8_lossy(&line[hash + 1 + colon + 1..]).into_owned();
                     let _ = pc.tx.send(payload);
@@ -367,12 +405,12 @@ fn handle_line_bytes(line: &[u8], pending: &Mutex<FxHashMap<u32, PendingCommand>
         }
     }
 
-    // ---------- fallback для любых строк, если что‑то ждём ----------
+   
     if pending.lock().is_empty() {
-        return;                      // никто ничего не ждёт → шум
+        return;                      
     }
 
-    // ➊ снимаем префикс ">>> " (если он есть)
+    
     let payload = if line.starts_with(b">>>") {
         let mut p = &line[3..];
         if p.first() == Some(&b' ') { p = &p[1..]; }
@@ -381,10 +419,8 @@ fn handle_line_bytes(line: &[u8], pending: &Mutex<FxHashMap<u32, PendingCommand>
         line
     };
 
-    // ➋ если payload *точно* совпадает с одной из посланных команд — это эхо
     if SENT_LOG.lock().iter().any(|cmd| cmd.as_slice()==payload) { return; }
 
-    // ➌ любая оставшаяся строка считаем ответом к первому ожидающему
     let mut pend = pending.lock();
     if let Some((&cid, _)) = pend.iter().next() {
         if let Some(pc) = pend.remove(&cid) {
@@ -432,7 +468,6 @@ impl<'a> Batch<'a> {
        self
    }
 
-   /// Отпускание ранее нажатой кнопки
     pub fn release(mut self, btn: MouseButton) -> Self {
        Self::mark("release");
        use std::fmt::Write;
@@ -445,10 +480,9 @@ impl<'a> Batch<'a> {
         use std::fmt::Write;  let _ = write!(self.buf, "km.wheel({d}){CRLF}");
         self
     }
-    pub fn run(self) -> MakcuResult<()> {           // одно write()
-        // профилируем сразу весь пакет
+    pub fn run(self) -> MakcuResult<()> {           
         Ok(PerformanceProfiler::measure("batch", || {
-            // единичный system‑write – это то, что реально интересно
+           
             let _ = self.dev.send_ff(&self.buf);
         }))
     }
@@ -456,7 +490,7 @@ impl<'a> Batch<'a> {
 
 
 #[cfg(not(feature = "async"))]
-pub struct DeviceAsync; // пустой
+pub struct DeviceAsync; 
 
 #[cfg(not(feature = "async"))]
 impl DeviceAsync {
@@ -581,7 +615,6 @@ impl<'a> AsyncBatch<'a> {
 pub struct Device {
     sp: Arc<Mutex<SerialPortWrap>>,
     connected: Arc<AtomicBool>,
-    // lock_state_cache: Arc<AtomicU32>,
     lock_valid: Arc<AtomicBool>,
     btn_cache: Arc<Mutex<MouseButtonStates>>,
 }
@@ -596,7 +629,6 @@ impl Device {
             
             sp: Arc::new(Mutex::new(SerialPortWrap::new(port, baud, timeout))),
             connected: Arc::new(AtomicBool::new(false)),
-            // lock_state_cache: Arc::new(AtomicU32::new(0)),
             lock_valid: Arc::new(AtomicBool::new(false)),
             btn_cache: Arc::new(Mutex::new(MouseButtonStates::default())),
         }
@@ -608,7 +640,6 @@ impl Device {
         });
         self.connected.store(true, Ordering::Release);
 
-        // cache‑callback
         let cache = self.btn_cache.clone();
         self.sp.lock().set_button_callback(Some(move |st| *cache.lock() = st));
         self.send_ff("km.buttons(1)")
@@ -651,8 +682,8 @@ impl Device {
         let sp = self.sp.lock();
         if let Some(user_cb) = cb {
             sp.set_button_callback(Some(move |st| {
-                *cache.lock() = st;     // поддерживаем кэш
-                user_cb(st);            // вызываем колбэк пользователя
+                *cache.lock() = st;     
+                user_cb(st);            
             }));
         } else {
             sp.set_button_callback(None::<fn(MouseButtonStates)>);
@@ -730,6 +761,7 @@ impl Device {
     pub fn profiler_stats() -> FxHashMap<&'static str, FxHashMap<&'static str, f64>> {
         PerformanceProfiler::stats()
     }
+
 }
 // ============================ MockSerial (optional) ========================
 #[cfg(feature = "mockserial")]
